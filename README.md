@@ -14,7 +14,7 @@ This solution is for anyone interested in how an end-to-end solution works that 
 
 This solution ingests weather data from the [Beijing PM2.5](https://archive.ics.uci.edu/ml/datasets/Beijing+PM2.5+Data) data set as a simulated device running on IoT Greengrass and EC2, stores it in the cloud with IoT Core and IoT Analytics, trains a forecasting machine learning model from it with Amazon SageMaker, then deploys the model to the edge for local inferences with IoT Greengrass and Lambda. Additionally, we have included an IoT Events detector model that will trigger an alert if too many forecasts are made that fall outside an acceptable range.
 
-TODO: architecture diagram
+![Solution Architecture](architecture.png)
 
 ### How do I use it?
 
