@@ -102,7 +102,7 @@ Notes for the notebook:
 
 A failure here to deploy most likely means a permissions error in your Greengrass service role. Double check that either your S3 bucket name includes the text "greengrass" or "sagemaker". If it does not, then you will need to add a policy to your Greengrass service role that grants read access to objects in your S3 bucket.
 
-###Testing inferences on the edge
+### Testing inferences on the edge
 1. Go to the *Test* page of the IoT Core console https://us-east-1.console.aws.amazon.com/iot/home?region=us-east-1#/test
 1. Subscribe to two topics `pollution/data` and `pollution/data/infer`
 1. Publish the default message to the topic `pollution/data/infer/trigger`. This will trigger the inference Lambda function which looks for the trained model and 
@@ -110,7 +110,7 @@ makes predictions on the test data.
 
 You should see messages coming on both the subscribed topics. The messages arriving on `pollution/data` should look familiar as they are the same format of message you ingested earlier. The messages arriving on `pollution/data/infer` are new. These are messages published by the inference Lambda function which is using your new machine learning model to predict the pollution value. You can see how accurate the prediction is by comparing it to the actual value for that measurement.
 
-###Cleaning up
+### Cleaning up
 To clean up the resources, you need to perform two manual steps before you can delete the CloudFormation stack:
 
 #### Reset deployments on Greengrass
