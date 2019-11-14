@@ -20,6 +20,10 @@ This solution ingests weather data from the [Beijing PM2.5](https://archive.ics.
 
 Read on in the next section called *Deployment steps* for instructions on AWS account preparation, CloudFormation template deployment, and interactions that walkthrough the solution.
 
+### How much does it cost?
+
+The combined compute resources (EC2, SageMaker) provisioned by this solution cost up to $0.50 per hour. There are one-time charges for IoT metered use that total about $0.25. We recommend following the clean up steps once you've finished evaluating the solution, or at least stopping the compute resources when not in use.
+
 ## Deployment steps
 
 ### Prerequisites
