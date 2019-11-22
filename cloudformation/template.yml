@@ -1,0 +1,1011 @@
+---
+"Mappings":
+  "RegionMap":
+    "ap-northeast-1":
+      "imageId": "ami-0ff21806645c5e492"
+    "eu-west-1":
+      "imageId": "ami-0ce71448843cb18a1"
+    "us-east-1":
+      "imageId": "ami-0b69ea66ff7391e80"
+    "us-east-2":
+      "imageId": "ami-00c03f7f7f2ec15c3"
+    "us-west-2":
+      "imageId": "ami-04b762b4289fba92b"
+"Outputs":
+  "StackArn":
+    "Value":
+      "Ref": "AWS::StackId"
+"Parameters":
+  "InstanceType":
+    "Default": "m4.xlarge"
+    "Type": "String"
+"Resources":
+  "AutoScalingGroup":
+    "Properties":
+      "HealthCheckGracePeriod": !!int "90"
+      "HealthCheckType": "EC2"
+      "LaunchConfigurationName":
+        "Ref": "LaunchConfiguration"
+      "MaxSize": !!int "1"
+      "MetricsCollection":
+      - "Granularity": "1Minute"
+      "MinSize": !!int "1"
+      "Tags":
+      - "Key": "StackName"
+        "PropagateAtLaunch": !!bool "true"
+        "Value":
+          "Ref": "AWS::StackName"
+      "VPCZoneIdentifier":
+      - "Ref": "Subnet"
+    "Type": "AWS::AutoScaling::AutoScalingGroup"
+  "DataIngestorLambda":
+    "Properties":
+      "Code":
+        "ZipFile": "import greengrasssdk\nfrom pandas import read_csv\nimport json\nimport time\n\n# Creating a greengrass core sdk client\nclient = greengrasssdk.client('iot-data')\ndata_dir = '/dest/'\n\ndef publishToIotCloud(train_dataset):\n    for i in range(len(train_dataset)):\n        current_row = train_dataset[i:i+1]\n        data = current_row.to_dict(orient='records')[0]\n        payload = json.dumps(data)\n        response = client.publish(\n            topic='pollution/data',\n            payload=payload\n        )\n        time.sleep(0.1)\n\ndef function_handler(event, context):\n    dataset = read_csv(data_dir + 'pollution.csv', header=0)\n    dataset.dropna(inplace=True)\n    publishToIotCloud(dataset)\n    return\n"
+      "Description": "publish historical data to an mqtt topic"
+      "Handler": "index.function_handler"
+      "MemorySize": !!int "1024"
+      "Role":
+        "Fn::GetAtt":
+        - "DataIngestorLambdaRole"
+        - "Arn"
+      "Runtime": "python2.7"
+      "Tags":
+      - "Key": "StackName"
+        "Value":
+          "Ref": "AWS::StackName"
+      "Timeout": !!int "60"
+    "Type": "AWS::Lambda::Function"
+  "DataIngestorLambdaRole":
+    "Properties":
+      "AssumeRolePolicyDocument":
+        "Statement":
+        - "Action":
+          - "sts:AssumeRole"
+          "Effect": "Allow"
+          "Principal":
+            "Service":
+            - "lambda.amazonaws.com"
+        "Version": "2012-10-17"
+      "Path": "/"
+      "Policies":
+      - "PolicyDocument":
+          "Statement":
+          - "Action":
+            - "logs:CreateLogGroup"
+            - "logs:CreateLogStream"
+            - "logs:PutLogEvents"
+            "Effect": "Allow"
+            "Resource": "*"
+          "Version": "2012-10-17"
+        "PolicyName": "cloudwatchLoggingPolicy"
+    "Type": "AWS::IAM::Role"
+  "DataIngestorLambdaVersion":
+    "Properties":
+      "Description": "Publish a version of the ingestor lambda"
+      "FunctionName":
+        "Fn::GetAtt":
+        - "DataIngestorLambda"
+        - "Arn"
+    "Type": "AWS::Lambda::Version"
+  "DataIngestorLambdaVersionAlias":
+    "Properties":
+      "Description": "Creating alias for published version"
+      "FunctionName":
+        "Fn::GetAtt":
+        - "DataIngestorLambda"
+        - "Arn"
+      "FunctionVersion":
+        "Fn::GetAtt":
+        - "DataIngestorLambdaVersion"
+        - "Version"
+      "Name":
+        "Fn::Join":
+        - ""
+        - - "v"
+          - "Fn::GetAtt":
+            - "DataIngestorLambdaVersion"
+            - "Version"
+    "Type": "AWS::Lambda::Alias"
+  "GreengrassFunctionDefinition":
+    "Properties":
+      "Name":
+        "Fn::Join":
+        - ""
+        - - "Ref": "AWS::StackName"
+          - "GreengrassGroupFunction"
+    "Type": "AWS::Greengrass::FunctionDefinition"
+  "GreengrassFunctionDefinitionVersion":
+    "Properties":
+      "FunctionDefinitionId":
+        "Ref": "GreengrassFunctionDefinition"
+      "Functions":
+      - "FunctionArn":
+          "Ref": "DataIngestorLambdaVersionAlias"
+        "FunctionConfiguration":
+          "Environment":
+            "ResourceAccessPolicies":
+            - "Permission": "ro"
+              "ResourceId": "accessToData"
+          "MemorySize": !!int "100000"
+          "Timeout": !!int "3600"
+        "Id": "ingestionFunction"
+      - "FunctionArn":
+          "Ref": "InferenceLambdaVersionAlias"
+        "FunctionConfiguration":
+          "Environment":
+            "ResourceAccessPolicies":
+            - "Permission": "ro"
+              "ResourceId": "accessToData"
+          "MemorySize": !!int "1000000"
+          "Timeout": !!int "3600"
+        "Id": "inferenceFunction"
+    "Type": "AWS::Greengrass::FunctionDefinitionVersion"
+  "GreengrassGroup":
+    "Properties":
+      "InitialVersion":
+        "CoreDefinitionVersionArn":
+          "Ref": "GreengrassGroupCoreVersion"
+        "FunctionDefinitionVersionArn":
+          "Ref": "GreengrassFunctionDefinitionVersion"
+        "LoggerDefinitionVersionArn":
+          "Ref": "GreengrassLoggerDefinitionVersion"
+        "ResourceDefinitionVersionArn":
+          "Ref": "GreengrassLocalResourceDefinitionVersion"
+        "SubscriptionDefinitionVersionArn":
+          "Ref": "GreengrassSubscriptionDefinitionVersion"
+      "Name":
+        "Fn::Join":
+        - ""
+        - - "Ref": "AWS::StackName"
+          - "GreengrassGroup"
+    "Type": "AWS::Greengrass::Group"
+  "GreengrassGroupCore":
+    "Properties":
+      "Name":
+        "Fn::Join":
+        - ""
+        - - "Ref": "AWS::StackName"
+          - "GreengrassGroupCore"
+    "Type": "AWS::Greengrass::CoreDefinition"
+  "GreengrassGroupCorePolicy":
+    "Properties":
+      "PolicyDocument": "{ \"Version\": \"2012-10-17\", \"Statement\": [ { \"Effect\": \"Allow\", \"Action\": [ \"iot:Publish\", \"iot:Subscribe\", \"iot:Connect\", \"iot:Receive\" ], \"Resource\": [ \"*\" ] }, { \"Effect\": \"Allow\", \"Action\": [ \"iot:GetThingShadow\", \"iot:UpdateThingShadow\", \"iot:DeleteThingShadow\" ], \"Resource\": [ \"*\" ] }, { \"Effect\": \"Allow\", \"Action\": [ \"greengrass:*\" ], \"Resource\": [ \"*\" ] } ] }"
+      "PolicyName":
+        "Fn::Join":
+        - ""
+        - - "Ref": "AWS::StackName"
+          - "GreengrassGroupCorePolicy"
+    "Type": "AWS::IoT::Policy"
+  "GreengrassGroupCoreThing":
+    "Properties":
+      "ThingName":
+        "Fn::Join":
+        - ""
+        - - "Ref": "AWS::StackName"
+          - "GreengrassGroupCore"
+    "Type": "AWS::IoT::Thing"
+  "GreengrassGroupCoreVersion":
+    "Properties":
+      "CoreDefinitionId":
+        "Ref": "GreengrassGroupCore"
+      "Cores":
+      - "CertificateArn":
+          "Fn::GetAtt":
+          - "IotCertificateKey"
+          - "Arn"
+        "Id": "Core1"
+        "SyncShadow": !!bool "true"
+        "ThingArn":
+          "Fn::Join":
+          - ""
+          - - "arn:aws:iot:"
+            - "Ref": "AWS::Region"
+            - ":"
+            - "Ref": "AWS::AccountId"
+            - ":"
+            - "thing/"
+            - "Ref": "GreengrassGroupCoreThing"
+    "Type": "AWS::Greengrass::CoreDefinitionVersion"
+  "GreengrassLocalResourceDefinition":
+    "Properties":
+      "Name":
+        "Fn::Join":
+        - ""
+        - - "Ref": "AWS::StackName"
+          - "GreengrassGroupLocalResource"
+    "Type": "AWS::Greengrass::ResourceDefinition"
+  "GreengrassLocalResourceDefinitionVersion":
+    "Properties":
+      "ResourceDefinitionId":
+        "Ref": "GreengrassLocalResourceDefinition"
+      "Resources":
+      - "Id": "accessToData"
+        "Name": "accessToData"
+        "ResourceDataContainer":
+          "LocalVolumeResourceData":
+            "DestinationPath": "/dest/"
+            "GroupOwnerSetting":
+              "AutoAddGroupOwner": !!bool "true"
+            "SourcePath": "/src/"
+    "Type": "AWS::Greengrass::ResourceDefinitionVersion"
+  "GreengrassLoggerDefinition":
+    "Properties":
+      "Name":
+        "Fn::Join":
+        - ""
+        - - "Ref": "AWS::StackName"
+          - "GreengrassLoggerDefinition"
+    "Type": "AWS::Greengrass::LoggerDefinition"
+  "GreengrassLoggerDefinitionVersion":
+    "Properties":
+      "LoggerDefinitionId":
+        "Ref": "GreengrassLoggerDefinition"
+      "Loggers":
+      - "Component": "Lambda"
+        "Id": "UserLambdaLogger"
+        "Level": "INFO"
+        "Space": !!int "100000"
+        "Type": "FileSystem"
+    "Type": "AWS::Greengrass::LoggerDefinitionVersion"
+  "GreengrassSubscriptionDefinition":
+    "Properties":
+      "Name":
+        "Fn::Join":
+        - ""
+        - - "Ref": "AWS::StackName"
+          - "GreengrassGroupSubscription"
+    "Type": "AWS::Greengrass::SubscriptionDefinition"
+  "GreengrassSubscriptionDefinitionVersion":
+    "Properties":
+      "SubscriptionDefinitionId":
+        "Ref": "GreengrassSubscriptionDefinition"
+      "Subscriptions":
+      - "Id": "triggerIngestLambda"
+        "Source": "cloud"
+        "Subject": "pollution/data/ingest/trigger"
+        "Target":
+          "Ref": "DataIngestorLambdaVersionAlias"
+      - "Id": "ingestData"
+        "Source":
+          "Ref": "DataIngestorLambdaVersionAlias"
+        "Subject": "pollution/data"
+        "Target": "cloud"
+      - "Id": "triggerInferenceLambda"
+        "Source": "cloud"
+        "Subject": "pollution/data/infer/trigger"
+        "Target":
+          "Ref": "InferenceLambdaVersionAlias"
+      - "Id": "inferData"
+        "Source":
+          "Ref": "InferenceLambdaVersionAlias"
+        "Subject": "pollution/data/infer"
+        "Target": "cloud"
+      - "Id": "ingestTestData"
+        "Source":
+          "Ref": "InferenceLambdaVersionAlias"
+        "Subject": "pollution/data"
+        "Target": "cloud"
+    "Type": "AWS::Greengrass::SubscriptionDefinitionVersion"
+  "InferenceLambda":
+    "Properties":
+      "Code":
+        "ZipFile": "import greengrasssdk\nfrom pandas import read_csv\nimport json\nfrom numpy import concatenate\nfrom joblib import load\nfrom keras.models import model_from_json\nfrom pandas import DataFrame\nfrom pandas import concat\nimport time\n\n# Creating a greengrass core sdk client\nclient = greengrasssdk.client('iot-data')\ndata_dir = '/src/'\nmodel_dir = '/dest'\n\ndef read_models():\n    scaler = load('%s/scaler.model' % model_dir )\n    json_file = open('%s/model.json' % model_dir, 'r')\n    loaded_model_json = json_file.read()\n    json_file.close()\n    loaded_model = model_from_json(loaded_model_json)\n    loaded_model.load_weights('%s/model.h5' % model_dir)\n    loaded_model.compile(loss='mae', optimizer='adam')\n    return scaler, loaded_model\n\ndef transform_to_supervised_series(data, n_in=1, n_out=1, dropnan=True):\n  n_vars = 1 if type(data) is list else data.shape[1]\n  df = DataFrame(data)\n  cols, names = list(), list()\n  #take the last n_in rows and create input sequence (t-n, ... t-1)\n  for i in range(n_in, 0, -1):\n      cols.append(df.shift(i))\n      names += [('var%d(t-%d)' % (j+1, i)) for j in range(n_vars)]\n  #take the next n_out rows as forecast sequence (t, t+1, ... t+n)\n  for i in range(0, n_out):\n      cols.append(df.shift(-i))\n      if i == 0:\n          names += [('var%d(t)' % (j+1)) for j in range(n_vars)]\n      else:\n          names += [('var%d(t+%d)' % (j+1, i)) for j in range(n_vars)]\n  # Merge all these rows together\n  agg = concat(cols, axis=1)\n  agg.columns = names\n  # drop rows for NaN values\n  if dropnan:\n      agg.dropna(inplace=True)\n  return agg\n\ndef transform_input(values, scaler):\n    values = values.astype('float32')\n    scaled = scaler.transform(values)\n    reframed = transform_to_supervised_series(scaled, 1, 1)\n    reframed.drop(reframed.columns[[9,10,11,12,13,14,15]], axis=1, inplace=True)\n    return reframed.values\n\ndef read_test_data():\n    dataset = read_csv(data_dir + 'pollution.csv', header=0)\n\n    n_test_hours = 4*365*24\n    test_dataset = dataset[n_test_hours:]\n    test_dataset.dropna(inplace=True)\n    return test_dataset\n\ndef publishToIotCloud(curr_row, predicted_y, actual_y):\n    data = curr_row.to_dict(orient='records')[0]\n    payload = json.dumps(data)\n    client.publish(\n        topic='pollution/data',\n        payload=payload\n    )\n\n    output = {\n        'predicted_pollution': float(predicted_y),\n        'actual_pollution': float(actual_y),\n        'date': data['date']\n    }\n\n    output_payload = json.dumps(output)\n    client.publish(\n        topic='pollution/data/infer',\n        payload=output_payload\n    )\n\ndef infer_data(test_X, test_y, model, test_data, scaler):\n    for i in range(test_X.shape[0]-1):\n        curr_test_X = test_X[i:i+1,:,:]\n        curr_test_y = test_y[i:i+1]\n        curr_y_hat = model.predict(curr_test_X)\n        curr_test_X = curr_test_X.reshape((curr_test_X.shape[0], curr_test_X.shape[2]))\n        curr_inv_yhat = concatenate((curr_y_hat, curr_test_X[:, 1:]), axis=1)\n        curr_inv_yhat = scaler.inverse_transform(curr_inv_yhat)\n        curr_inv_yhat = curr_inv_yhat[:,0]\n        actual_y = test_data.iloc[i+1]['pollution']\n        publishToIotCloud(test_data[i:i+1], curr_inv_yhat[0], actual_y)\n        time.sleep(1)\n\ndef function_handler(event, context):\n    test_data = read_test_data()\n    indexed_test_Data = test_data.copy().set_index('date')\n    scaler, lstm_model = read_models()\n    transform_values = transform_input(indexed_test_Data.values, scaler)\n    test_X, test_y = transform_values[:, :-1], transform_values[:, -1]\n    test_X = test_X.reshape((test_X.shape[0], 1, test_X.shape[1]))\n    infer_data(test_X, test_y, lstm_model, test_data, scaler)\n    return\n"
+      "Description": "performs inference on test data using the deployed model"
+      "Handler": "index.function_handler"
+      "MemorySize": !!int "1024"
+      "Role":
+        "Fn::GetAtt":
+        - "InferenceLambdaRole"
+        - "Arn"
+      "Runtime": "python2.7"
+      "Tags":
+      - "Key": "StackName"
+        "Value":
+          "Ref": "AWS::StackName"
+      "Timeout": !!int "60"
+    "Type": "AWS::Lambda::Function"
+  "InferenceLambdaRole":
+    "Properties":
+      "AssumeRolePolicyDocument":
+        "Statement":
+        - "Action":
+          - "sts:AssumeRole"
+          "Effect": "Allow"
+          "Principal":
+            "Service":
+            - "lambda.amazonaws.com"
+        "Version": "2012-10-17"
+      "Path": "/"
+      "Policies":
+      - "PolicyDocument":
+          "Statement":
+          - "Action":
+            - "logs:CreateLogGroup"
+            - "logs:CreateLogStream"
+            - "logs:PutLogEvents"
+            "Effect": "Allow"
+            "Resource": "arn:aws:logs:*:*:*"
+          "Version": "2012-10-17"
+        "PolicyName": "cloudwatchLoggingPolicy"
+    "Type": "AWS::IAM::Role"
+  "InferenceLambdaVersion":
+    "Properties":
+      "Description": "Publish a version of the inference lambda"
+      "FunctionName":
+        "Fn::GetAtt":
+        - "InferenceLambda"
+        - "Arn"
+    "Type": "AWS::Lambda::Version"
+  "InferenceLambdaVersionAlias":
+    "Properties":
+      "Description": "Creating alias for published version"
+      "FunctionName":
+        "Fn::GetAtt":
+        - "InferenceLambda"
+        - "Arn"
+      "FunctionVersion":
+        "Fn::GetAtt":
+        - "InferenceLambdaVersion"
+        - "Version"
+      "Name":
+        "Fn::Join":
+        - ""
+        - - "v"
+          - "Fn::GetAtt":
+            - "InferenceLambdaVersion"
+            - "Version"
+    "Type": "AWS::Lambda::Alias"
+  "InstanceRole":
+    "Properties":
+      "AssumeRolePolicyDocument":
+        "Statement":
+        - "Action":
+          - "sts:AssumeRole"
+          "Effect": "Allow"
+          "Principal":
+            "Service":
+            - "ec2.amazonaws.com"
+        "Version": "2012-10-17"
+      "Path": "/"
+      "Policies":
+      - "PolicyDocument":
+          "Statement":
+          - "Action":
+            - "s3:Get*"
+            "Effect": "Allow"
+            "Resource":
+              "Fn::Sub": "arn:aws:s3:::${Sagemaker}*"
+          "Version": "2012-10-17"
+        "PolicyName": "s3Access"
+    "Type": "AWS::IAM::Role"
+  "InstanceRoleProfile":
+    "Properties":
+      "Path": "/executionEC2Role/"
+      "Roles":
+      - "Ref": "InstanceRole"
+    "Type": "AWS::IAM::InstanceProfile"
+  "InternetGateway":
+    "Properties":
+      "Tags":
+      - "Key": "StackName"
+        "Value":
+          "Ref": "AWS::StackName"
+    "Type": "AWS::EC2::InternetGateway"
+  "IoTEventsDetectorModel":
+    "Properties":
+      "DetectorModelDefinition":
+        "InitialStateName": "ModelAccurate"
+        "States":
+        - "OnEnter":
+            "Events":
+            - "Actions":
+              - "SetVariable":
+                  "Value": !!int "0"
+                  "VariableName": "Count"
+              - "SetVariable":
+                  "Value": !!int "0"
+                  "VariableName": "IncorrectPredictions"
+              "EventName": "InitializeVariable"
+          "OnInput":
+            "Events":
+            - "Actions":
+              - "SetVariable":
+                  "Value": "$variable.Count + 1"
+                  "VariableName": "Count"
+              "EventName": "IncrementCount"
+            - "Actions":
+              - "SetVariable":
+                  "Value": "$variable.IncorrectPredictions + 1"
+                  "VariableName": "IncorrectPredictions"
+              "Condition":
+                "Fn::Sub": "(((1.0*$input.${IoTEventsInput}.predicted_pollution - $input.${IoTEventsInput}.actual_pollution)/$input.${IoTEventsInput}.actual_pollution) > 0.1) || (((1.0*$input.${IoTEventsInput}.predicted_pollution - $input.${IoTEventsInput}.actual_pollution)/$input.${IoTEventsInput}.actual_pollution) < -0.1)"
+              "EventName": "IncorrectPrediction"
+            - "Actions":
+              - "SetVariable":
+                  "Value": "$variable.IncorrectPredictions - 1"
+                  "VariableName": "IncorrectPredictions"
+              "Condition":
+                "Fn::Sub": "(((1.0*$input.${IoTEventsInput}.predicted_pollution - $input.${IoTEventsInput}.actual_pollution)/$input.${IoTEventsInput}.actual_pollution) <= 0.1) && (((1.0*$input.${IoTEventsInput}.predicted_pollution - $input.${IoTEventsInput}.actual_pollution)/$input.${IoTEventsInput}.actual_pollution) >= -0.1)"
+              "EventName": "CorrectPrediction"
+            "TransitionEvents":
+            - "Condition": "(1.0*$variable.IncorrectPredictions)/$variable.Count > 0.10 && $variable.Count > 5"
+              "EventName": "TransitionToInaccurateModel"
+              "NextState": "ModelInAccurate"
+          "StateName": "ModelAccurate"
+        - "OnEnter":
+            "Events":
+            - "Actions":
+              - "IotTopicPublish":
+                  "MqttTopic": "pollution/data/model/accuracy"
+              "EventName": "SendMqttMessage"
+          "OnInput":
+            "Events":
+            - "Actions":
+              - "SetVariable":
+                  "Value": "$variable.Count + 1"
+                  "VariableName": "Count"
+              "EventName": "IncrementCount"
+            - "Actions":
+              - "SetVariable":
+                  "Value": "$variable.IncorrectPredictions + 1"
+                  "VariableName": "IncorrectPredictions"
+              "Condition":
+                "Fn::Sub": "(((1.0*$input.${IoTEventsInput}.predicted_pollution - $input.${IoTEventsInput}.actual_pollution)/$input.${IoTEventsInput}.actual_pollution) > 0.1) || (((1.0*$input.${IoTEventsInput}.predicted_pollution - $input.${IoTEventsInput}.actual_pollution)/$input.${IoTEventsInput}.actual_pollution) < -0.1)"
+              "EventName": "IncorrectPrediction"
+            - "Actions":
+              - "SetVariable":
+                  "Value": "$variable.IncorrectPredictions - 1"
+                  "VariableName": "IncorrectPredictions"
+              "Condition":
+                "Fn::Sub": "(((1.0*$input.${IoTEventsInput}.predicted_pollution - $input.${IoTEventsInput}.actual_pollution)/$input.${IoTEventsInput}.actual_pollution) <= 0.1) && (((1.0*$input.${IoTEventsInput}.predicted_pollution - $input.${IoTEventsInput}.actual_pollution)/$input.${IoTEventsInput}.actual_pollution) >= -0.1)"
+              "EventName": "CorrectPrediction"
+            "TransitionEvents":
+            - "Condition": "(1.0*$variable.IncorrectPredictions)/$variable.Count < 0.10 && $variable.Count > 5"
+              "EventName": "TransitionToAccurateModel"
+              "NextState": "ModelAccurate"
+          "StateName": "ModelInAccurate"
+      "RoleArn":
+        "Fn::GetAtt":
+        - "IotEventDetectorModelRole"
+        - "Arn"
+      "Tags":
+      - "Key": "StackName"
+        "Value":
+          "Ref": "AWS::StackName"
+    "Type": "AWS::IoTEvents::DetectorModel"
+  "IoTEventsInput":
+    "Properties":
+      "InputDefinition":
+        "Attributes":
+        - "JsonPath": "predicted_pollution"
+        - "JsonPath": "actual_pollution"
+      "Tags":
+      - "Key": "StackName"
+        "Value":
+          "Ref": "AWS::StackName"
+    "Type": "AWS::IoTEvents::Input"
+  "IotAnalyticsChannel":
+    "Properties":
+      "Tags":
+      - "Key": "StackName"
+        "Value":
+          "Ref": "AWS::StackName"
+    "Type": "AWS::IoTAnalytics::Channel"
+  "IotAnalyticsDatastore":
+    "Properties":
+      "Tags":
+      - "Key": "StackName"
+        "Value":
+          "Ref": "AWS::StackName"
+    "Type": "AWS::IoTAnalytics::Datastore"
+  "IotAnalyticsPipeline":
+    "Properties":
+      "PipelineActivities":
+      - "Channel":
+          "ChannelName":
+            "Ref": "IotAnalyticsChannel"
+          "Name": "ChannelActivity"
+          "Next": "DatastoreActivity"
+        "Datastore":
+          "DatastoreName":
+            "Ref": "IotAnalyticsDatastore"
+          "Name": "DatastoreActivity"
+      "Tags":
+      - "Key": "StackName"
+        "Value":
+          "Ref": "AWS::StackName"
+    "Type": "AWS::IoTAnalytics::Pipeline"
+  "IotAnalyticsSqlDataset":
+    "Properties":
+      "Actions":
+      - "ActionName": "SqlAction"
+        "QueryAction":
+          "SqlQuery":
+            "Fn::Join":
+            - ""
+            - - "SELECT * FROM "
+              - "Ref": "IotAnalyticsDatastore"
+      "Tags":
+      - "Key": "StackName"
+        "Value":
+          "Ref": "AWS::StackName"
+    "Type": "AWS::IoTAnalytics::Dataset"
+  "IotCertificateKey":
+    "Properties":
+      "S3Bucket":
+        "Ref": "Sagemaker"
+      "S3ObjectPrefix": "certs"
+      "ServiceToken":
+        "Fn::GetAtt":
+        - "IotCertificateKeyCreatorFunction"
+        - "Arn"
+    "Type": "Custom::IotCertificateKeyCreator"
+  "IotCertificateKeyCreatorFunction":
+    "Properties":
+      "Code":
+        "ZipFile":
+          "Fn::Sub":
+          - "import boto3\nimport cfnresponse\nfrom zipfile import ZipFile\nimport os\nimport json\n\ns3Client = boto3.client('s3')\niotClient = boto3.client('iot')\ntmpDir = \"/tmp/\"\nzipFileName = \"certs.zip\"\nconfigName = \"config.json\"\ncertPemName = \"cert.pem\"\npublicKeyName = \"public.key\"\nprivateKeyName = \"private.key\"\n\ndef createConfig(iotEndpoint):\n config = {\n            \"coreThing\" : {\n              \"caPath\" : \"root.ca.pem\",\n              \"certPath\" : \"cert.pem\",\n              \"keyPath\" : \"private.key\",\n              \"thingArn\" : \"${thingArn}\",\n              \"iotHost\" : \"{iotendpoint}\",\n              \"ggHost\" : \"greengrass-ats.iot.${AWS::Region}.amazonaws.com\",\n              \"keepAlive\" : 600\n            },\n            \"runtime\" : {\n              \"cgroup\" : {\n                \"useSystemd\" : \"yes\"\n              }\n            },\n            \"managedRespawn\" : False,\n            \"crypto\" : {\n              \"principals\" : {\n                \"SecretsManager\" : {\n                  \"privateKeyPath\" : \"file:///greengrass/certs/private.key\"\n                },\n                \"IoTCertificate\" : {\n                  \"privateKeyPath\" : \"file:///greengrass/certs/private.key\",\n                  \"certificatePath\" : \"file:///greengrass/certs/cert.pem\"\n                }\n              },\n              \"caPath\" : \"file:///greengrass/certs/root.ca.pem\"\n            }\n          }\n config['coreThing']['iotHost'] = iotEndpoint\n return config\n\ndef saveStringToFile(stringValue, fileName):\n    text_file = open(fileName, \"w\")\n    text_file.write(stringValue)\n    text_file.close()\n\ndef saveCertsAndKeys(response, iotEndpoint):\n    config = createConfig(iotEndpoint)\n    saveStringToFile(json.dumps(config), tmpDir + configName)\n    saveStringToFile(response['certificatePem'], tmpDir + certPemName)\n    saveStringToFile(response['keyPair']['PublicKey'], tmpDir + publicKeyName)\n    saveStringToFile(response['keyPair']['PrivateKey'], tmpDir + privateKeyName)\n\n    file_paths = [tmpDir+certPemName, tmpDir+publicKeyName, tmpDir+privateKeyName, tmpDir+configName]\n    # writing files to a zipfile\n    with ZipFile(tmpDir + zipFileName,'w') as zip:\n        for file in file_paths:\n            zip.write(file)\n\ndef deleteCerts(certificateId):\n    iotClient.update_certificate(certificateId=certificateId,newStatus='INACTIVE')\n    iotClient.delete_certificate(certificateId=certificateId)\n\ndef uploadTos3(s3Bucket, objectPrefix):\n    response = s3Client.upload_file(tmpDir + zipFileName, s3Bucket, objectPrefix + \"/\" + zipFileName)\n\ndef deleteS3Object(s3bucket, s3objectPrefix):\n    s3Client.delete_object(Bucket = s3bucket, Key = s3objectPrefix + \"/\" + zipFileName)\n\ndef handler(event, context):\n    s3bucket = event['ResourceProperties']['S3Bucket']\n    s3objectPrefix = event['ResourceProperties']['S3ObjectPrefix']\n    if event['RequestType'] == 'Delete':\n      try:\n        deleteS3Object(s3bucket, s3objectPrefix)\n        certificateId = event['PhysicalResourceId']\n        if certificateId != '' :\n          deleteCerts(certificateId)\n        cfnresponse.send(event, context, cfnresponse.SUCCESS, {})\n      except Exception as ex:\n        print(ex)\n        cfnresponse.send(event, context, cfnresponse.FAILED, {})\n    else:\n      physicalResourceId = ''\n      try:\n        iotEndpoint = iotClient.describe_endpoint(endpointType=\"iot:Data-ATS\")['endpointAddress']\n        response = iotClient.create_keys_and_certificate(setAsActive=True)\n        physicalResourceId = response['certificateId']\n        saveCertsAndKeys(response, iotEndpoint)\n        uploadTos3(s3bucket, s3objectPrefix)\n        response_data = {\n            'Arn': response['certificateArn']\n        }\n        cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data, physicalResourceId)\n      except Exception as ex:\n        print(ex)\n        cfnresponse.send(event, context, cfnresponse.FAILED, {}, physicalResourceId)\n"
+          - "thingArn":
+              "Fn::Join":
+              - ""
+              - - "arn:aws:iot:"
+                - "Ref": "AWS::Region"
+                - ":"
+                - "Ref": "AWS::AccountId"
+                - ":"
+                - "thing/"
+                - "Ref": "AWS::StackName"
+                - "GreengrassGroupCore"
+      "Description": "Create certificates and uploads them to s3"
+      "Handler": "index.handler"
+      "Role":
+        "Fn::GetAtt":
+        - "IotCertificateKeyCreatorFunctionRole"
+        - "Arn"
+      "Runtime": "python3.6"
+      "Timeout": !!int "600"
+    "Type": "AWS::Lambda::Function"
+  "IotCertificateKeyCreatorFunctionRole":
+    "Properties":
+      "AssumeRolePolicyDocument":
+        "Statement":
+        - "Action":
+          - "sts:AssumeRole"
+          "Effect": "Allow"
+          "Principal":
+            "Service":
+            - "lambda.amazonaws.com"
+        "Version": "2012-10-17"
+      "Path": "/"
+      "Policies":
+      - "PolicyDocument":
+          "Statement":
+          - "Action":
+            - "iot:DeleteCertificate"
+            - "iot:CreateKeysAndCertificate"
+            - "iot:UpdateCertificate"
+            - "iot:DescribeEndpoint"
+            "Effect": "Allow"
+            "Resource": "*"
+          "Version": "2012-10-17"
+        "PolicyName": "createIotCertificateKeys"
+      - "PolicyDocument":
+          "Statement":
+          - "Action":
+            - "s3:Get*"
+            - "s3:Put*"
+            - "s3:DeleteObj*"
+            "Effect": "Allow"
+            "Resource":
+              "Fn::Sub": "arn:aws:s3:::${Sagemaker}*"
+          "Version": "2012-10-17"
+        "PolicyName": "uploadIotCertificateKeys"
+      - "PolicyDocument":
+          "Statement":
+          - "Action":
+            - "logs:CreateLogGroup"
+            - "logs:CreateLogStream"
+            - "logs:PutLogEvents"
+            "Effect": "Allow"
+            "Resource": "arn:aws:logs:*:*:*"
+          "Version": "2012-10-17"
+        "PolicyName": "cloudwatchLogging"
+    "Type": "AWS::IAM::Role"
+  "IotEventDetectorModelRole":
+    "Properties":
+      "AssumeRolePolicyDocument":
+        "Statement":
+        - "Action":
+          - "sts:AssumeRole"
+          "Effect": "Allow"
+          "Principal":
+            "Service":
+            - "iotevents.amazonaws.com"
+        "Version": "2012-10-17"
+      "Path": "/"
+      "Policies":
+      - "PolicyDocument":
+          "Statement":
+          - "Action":
+            - "iot:Publish"
+            "Effect": "Allow"
+            "Resource":
+              "Fn::Join":
+              - ""
+              - - "arn:aws:iot:"
+                - "Ref": "AWS::Region"
+                - ":"
+                - "Ref": "AWS::AccountId"
+                - ":"
+                - "topic/"
+                - "pollution/data/model/accuracy"
+          "Version": "2012-10-17"
+        "PolicyName": "iotMqttPublish"
+    "Type": "AWS::IAM::Role"
+  "IotEventsTopicRule":
+    "Properties":
+      "InputName":
+        "Ref": "IoTEventsInput"
+      "RoleArn":
+        "Fn::GetAtt":
+        - "IotEventsTopicRuleRole"
+        - "Arn"
+      "RuleName":
+        "Fn::Join":
+        - ""
+        - - "Ref": "AWS::StackName"
+          - "IotEventsTopicRule"
+      "ServiceToken":
+        "Fn::GetAtt":
+        - "TopicRuleIotEventsFunction"
+        - "Arn"
+      "TopicDescription": "Sending inference to iot events for model monitoring"
+      "TopicSql": "SELECT * FROM 'pollution/data/infer'"
+    "Type": "Custom::TopicRuleIotEvents"
+  "IotEventsTopicRuleRole":
+    "Properties":
+      "AssumeRolePolicyDocument":
+        "Statement":
+        - "Action":
+          - "sts:AssumeRole"
+          "Effect": "Allow"
+          "Principal":
+            "Service":
+            - "iot.amazonaws.com"
+        "Version": "2012-10-17"
+      "Path": "/"
+      "Policies":
+      - "PolicyDocument":
+          "Statement":
+          - "Action":
+            - "iotevents:BatchPutMessage"
+            "Effect": "Allow"
+            "Resource":
+              "Fn::Join":
+              - ""
+              - - "arn:aws:iotevents:"
+                - "Ref": "AWS::Region"
+                - ":"
+                - "Ref": "AWS::AccountId"
+                - ":"
+                - "input/"
+                - "Ref": "IoTEventsInput"
+          "Version": "2012-10-17"
+        "PolicyName": "IotEventsTopicRuleRoleInlinePolicy"
+    "Type": "AWS::IAM::Role"
+  "IotRuleRole":
+    "Properties":
+      "AssumeRolePolicyDocument":
+        "Statement":
+        - "Action":
+          - "sts:AssumeRole"
+          "Effect": "Allow"
+          "Principal":
+            "Service":
+            - "iot.amazonaws.com"
+        "Version": "2012-10-17"
+      "Path": "/"
+      "Policies":
+      - "PolicyDocument":
+          "Statement":
+          - "Action":
+            - "iotanalytics:BatchPutMessage"
+            "Effect": "Allow"
+            "Resource":
+              "Fn::Join":
+              - ""
+              - - "arn:aws:iotanalytics:"
+                - "Ref": "AWS::Region"
+                - ":"
+                - "Ref": "AWS::AccountId"
+                - ":"
+                - "channel/"
+                - "Ref": "IotAnalyticsChannel"
+          "Version": "2012-10-17"
+        "PolicyName": "IotRuleRoleInlinePolicy"
+    "Type": "AWS::IAM::Role"
+  "IotTopicRule":
+    "Properties":
+      "TopicRulePayload":
+        "Actions":
+        - "IotAnalytics":
+            "ChannelName":
+              "Ref": "IotAnalyticsChannel"
+            "RoleArn":
+              "Fn::GetAtt":
+              - "IotRuleRole"
+              - "Arn"
+        "RuleDisabled": !!bool "false"
+        "Sql": "SELECT * FROM 'pollution/data'"
+    "Type": "AWS::IoT::TopicRule"
+  "LaunchConfiguration":
+    "DependsOn": "IotCertificateKey"
+    "Properties":
+      "AssociatePublicIpAddress": !!bool "true"
+      "BlockDeviceMappings":
+      - "DeviceName": "/dev/xvda"
+        "Ebs":
+          "DeleteOnTermination": !!bool "true"
+          "VolumeSize": !!int "20"
+          "VolumeType": "gp2"
+      "IamInstanceProfile":
+        "Ref": "InstanceRoleProfile"
+      "ImageId":
+        "Fn::FindInMap":
+        - "RegionMap"
+        - "Ref": "AWS::Region"
+        - "imageId"
+      "InstanceType":
+        "Ref": "InstanceType"
+      "SecurityGroups":
+      - "Ref": "SecurityGroup"
+      "UserData":
+        "Fn::Base64":
+          "Fn::Sub": "#!/bin/bash -xue\n\n###Upgrade AWS CLI###\necho 'upgrading aws cli'\nyum upgrade -y aws-cli\n\n###Install pip###\ncurl -o /tmp/get-pip.py https://bootstrap.pypa.io/get-pip.py\npython /tmp/get-pip.py\n\n###Install python libraries###\npip install pandas\npip install joblib\npip install keras\npip install scikit-learn\npip install --ignore-installed tensorflow\n\n###Install greengrass sdk###\npip install greengrasssdk\n\n###Commands taken from https://docs.aws.amazon.com/greengrass/latest/developerguide/setup-filter.ec2.html###\n###Adding GG user and group###\necho 'Adding Greengrass user and group'\nsudo adduser --system ggc_user\nsudo groupadd --system ggc_group\n\n###Mounting Linux Control groups\necho 'Mounting Linux control groups'\ncurl https://raw.githubusercontent.com/tianon/cgroupfs-mount/951c38ee8d802330454bdede20d85ec1c0f8d312/cgroupfs-mount > cgroupfs-mount.sh\nchmod +x cgroupfs-mount.sh\nsudo bash ./cgroupfs-mount.sh\n\n###Download Greengrass###\necho 'download and installing greengrass'\nwget https://d1onfpft10uf5o.cloudfront.net/greengrass-core/downloads/1.9.4/greengrass-linux-x86-64-1.9.4.tar.gz\nsudo tar -xzvf greengrass-linux-x86-64-1.9.4.tar.gz -C /\n\n###Downloading Certificates for Greengrass###\necho 'Downloading certs for greengrass'\naws s3 cp s3://${Sagemaker}/certs/certs.zip /tmp/cert.zip\nunzip /tmp/cert.zip -d /tmp/\nsudo mv /tmp/tmp/config.json /greengrass/config/\nsudo mv /tmp/tmp/* /greengrass/certs/\n\n###Adding Amazon Root Cert\necho 'Adding root CA'\ncd /greengrass/certs/\nsudo wget -O root.ca.pem https://www.amazontrust.com/repository/AmazonRootCA1.pem\n\n###Start Greengrass Service###\ncd /greengrass/ggc/core/\nsudo ./greengrassd start\n\n###Create a src and dest directory for lambda###\nmkdir /src\nchmod 0775 /src\nmkdir /dest\nchmod 0775 /dest\nsudo wget -O /src/pollution.csv https://ggdemo-ashish.s3.amazonaws.com/pollution.csv\n"
+    "Type": "AWS::AutoScaling::LaunchConfiguration"
+  "PolicyPrincipalAttachment":
+    "Properties":
+      "PolicyName":
+        "Ref": "GreengrassGroupCorePolicy"
+      "Principal":
+        "Fn::GetAtt":
+        - "IotCertificateKey"
+        - "Arn"
+    "Type": "AWS::IoT::PolicyPrincipalAttachment"
+  "Route":
+    "Properties":
+      "DestinationCidrBlock": "0.0.0.0/0"
+      "GatewayId":
+        "Ref": "InternetGateway"
+      "RouteTableId":
+        "Ref": "RouteTable"
+    "Type": "AWS::EC2::Route"
+  "RouteTable":
+    "Properties":
+      "Tags":
+      - "Key": "StackName"
+        "Value":
+          "Ref": "AWS::StackName"
+      "VpcId":
+        "Ref": "VPC"
+    "Type": "AWS::EC2::RouteTable"
+  "SageMakerNotebookInstanceLifecycleConfig":
+    "Properties":
+      "OnCreate":
+      - "Content":
+          "Fn::Base64":
+            "Fn::Join":
+            - ""
+            - - "cd /tmp/\n"
+              - "wget -O lstm-model.zip https://ggdemo-ashish.s3.amazonaws.com/lstm-model.zip\n"
+              - "mkdir resources\n"
+              - "unzip lstm-model.zip -d resources\n"
+              - "mv resources/* /home/ec2-user/SageMaker/\n"
+              - "/home/ec2-user/anaconda3/envs/tensorflow_p36/bin/python -m pip install statsmodels==0.10.0rc2 --pre\n"
+              - "Fn::Sub": "sed -i -e 's/XYZ-IotAnalyticsDataset-XYZ/${IotAnalyticsSqlDataset}/g' -e 's/XYZ-S3Bucket-XYZ/${Sagemaker}/g' /home/ec2-user/SageMaker/pollutionPredictionLSTM-Training.ipynb\n"
+              - "sudo pkill -f jupyter\n"
+      "OnStart":
+      - "Content":
+          "Fn::Base64":
+            "Fn::Join":
+            - ""
+            - - "#!/bin/bash\n"
+              - "cd /tmp\n"
+              - "aws s3 cp s3://iotanalytics-notebook-containers/iota_notebook_containers.zip ./\n"
+              - "unzip iota_notebook_containers.zip\n"
+              - "su - ec2-user -c \"source activate JupyterSystemEnv && cd /tmp/iota_notebook_containers && sh install.sh\""
+    "Type": "AWS::SageMaker::NotebookInstanceLifecycleConfig"
+  "Sagemaker":
+    "Properties":
+      "Tags":
+      - "Key": "StackName"
+        "Value":
+          "Ref": "AWS::StackName"
+    "Type": "AWS::S3::Bucket"
+  "SagemakerExecutionRole":
+    "Properties":
+      "AssumeRolePolicyDocument":
+        "Statement":
+        - "Action":
+          - "sts:AssumeRole"
+          "Effect": "Allow"
+          "Principal":
+            "Service":
+            - "sagemaker.amazonaws.com"
+        "Version": "2012-10-17"
+      "ManagedPolicyArns":
+      - "arn:aws:iam::aws:policy/AmazonSageMakerFullAccess"
+      "Path": "/"
+      "Policies":
+      - "PolicyDocument":
+          "Statement":
+          - "Action":
+            - "s3:Get*"
+            - "s3:Put*"
+            "Effect": "Allow"
+            "Resource":
+              "Fn::Sub": "arn:aws:s3:::${Sagemaker}*"
+          "Version": "2012-10-17"
+        "PolicyName": "SagemakerExecutionRoleS3InlinePolicy"
+      - "PolicyDocument":
+          "Statement":
+          - "Action":
+            - "s3:Get*"
+            "Effect": "Allow"
+            "Resource":
+              "Fn::Sub": "arn:aws:s3:::iotanalytics-notebook-containers/*"
+          "Version": "2012-10-17"
+        "PolicyName": "SagamkerIotanalyticsPluginAccess"
+      - "PolicyDocument":
+          "Statement":
+          - "Action":
+            - "iotanalytics:*"
+            "Effect": "Allow"
+            "Resource": "*"
+          "Version": "2012-10-17"
+        "PolicyName": "SagemakerExecutionRoleIotAnalyticsInlinePolicy"
+      - "PolicyDocument":
+          "Statement":
+          - "Action":
+            - "iam:GetRole"
+            "Effect": "Allow"
+            "Resource": "*"
+          "Version": "2012-10-17"
+        "PolicyName": "SagemakerExecutionRoleIamInlinePolicy"
+    "Type": "AWS::IAM::Role"
+  "SagemakerNotebookInstance":
+    "Properties":
+      "InstanceType": "ml.m4.xlarge"
+      "LifecycleConfigName":
+        "Fn::GetAtt":
+        - "SageMakerNotebookInstanceLifecycleConfig"
+        - "NotebookInstanceLifecycleConfigName"
+      "RoleArn":
+        "Fn::GetAtt":
+        - "SagemakerExecutionRole"
+        - "Arn"
+    "Type": "AWS::SageMaker::NotebookInstance"
+  "SecurityGroup":
+    "Properties":
+      "GroupDescription": "Enable access to MQTT and SSH port"
+      "SecurityGroupIngress":
+      - "CidrIp": "0.0.0.0/0"
+        "FromPort": !!int "8883"
+        "IpProtocol": "tcp"
+        "ToPort": !!int "8883"
+      - "CidrIp": "0.0.0.0/0"
+        "FromPort": !!int "22"
+        "IpProtocol": "TCP"
+        "ToPort": !!int "22"
+      "Tags":
+      - "Key": "StackName"
+        "Value":
+          "Ref": "AWS::StackName"
+      "VpcId":
+        "Ref": "VPC"
+    "Type": "AWS::EC2::SecurityGroup"
+  "Subnet":
+    "Properties":
+      "AvailabilityZone":
+        "Fn::Join":
+        - ""
+        - - "Ref": "AWS::Region"
+          - "a"
+      "CidrBlock": "192.168.128.0/25"
+      "MapPublicIpOnLaunch": !!bool "true"
+      "Tags":
+      - "Key": "StackName"
+        "Value":
+          "Ref": "AWS::StackName"
+      "VpcId":
+        "Ref": "VPC"
+    "Type": "AWS::EC2::Subnet"
+  "SubnetRouteTableAssociation":
+    "Properties":
+      "RouteTableId":
+        "Ref": "RouteTable"
+      "SubnetId":
+        "Ref": "Subnet"
+    "Type": "AWS::EC2::SubnetRouteTableAssociation"
+  "ThingPrincipalAttachment":
+    "Properties":
+      "Principal":
+        "Fn::GetAtt":
+        - "IotCertificateKey"
+        - "Arn"
+      "ThingName":
+        "Ref": "GreengrassGroupCoreThing"
+    "Type": "AWS::IoT::ThingPrincipalAttachment"
+  "TopicRuleIotEventsFunction":
+    "Properties":
+      "Code":
+        "ZipFile": "import boto3\nimport cfnresponse\n\n\niotClient = boto3.client('iot')\n\ndef createTopicRule(ruleName, topicSql, topicDescription, inputName, roleArn):\n  response = iotClient.create_topic_rule(\n      ruleName=ruleName,\n      topicRulePayload={\n          'sql': topicSql,\n          'description': topicDescription,\n          'actions': [\n              {\n                  'iotEvents': {\n                      'inputName': inputName,\n                      'roleArn': roleArn\n                  }\n              },\n          ],\n          'ruleDisabled': False\n      }\n  )\n\ndef deleteTopicRule(ruleName):\n  response = iotClient.delete_topic_rule(\n    ruleName=ruleName\n  )\n\ndef handler(event, context):\n    ruleName = event['ResourceProperties']['RuleName']\n    topicSql = event['ResourceProperties']['TopicSql']\n    topicDescription = event['ResourceProperties']['TopicDescription']\n    inputName = event['ResourceProperties']['InputName']\n    roleArn = event['ResourceProperties']['RoleArn']\n\n    if event['RequestType'] == 'Delete':\n      try:\n        deleteTopicRule(ruleName)\n        cfnresponse.send(event, context, cfnresponse.SUCCESS, {})\n      except Exception as ex:\n        print(ex)\n        cfnresponse.send(event, context, cfnresponse.FAILED, {})\n    else:\n      physicalResourceId = ruleName\n      try:\n        createTopicRule(ruleName, topicSql, topicDescription, inputName, roleArn)\n        response_data = {}\n        cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, physicalResourceId)\n      except Exception as ex:\n        print(ex)\n        cfnresponse.send(event, context, cfnresponse.FAILED, {}, physicalResourceId)"
+      "Description": "Create Topic Rule for Iot Events"
+      "Handler": "index.handler"
+      "Role":
+        "Fn::GetAtt":
+        - "TopicRuleIotEventsFunctionRole"
+        - "Arn"
+      "Runtime": "python3.6"
+      "Timeout": !!int "600"
+    "Type": "AWS::Lambda::Function"
+  "TopicRuleIotEventsFunctionRole":
+    "Properties":
+      "AssumeRolePolicyDocument":
+        "Statement":
+        - "Action":
+          - "sts:AssumeRole"
+          "Effect": "Allow"
+          "Principal":
+            "Service":
+            - "lambda.amazonaws.com"
+        "Version": "2012-10-17"
+      "Path": "/"
+      "Policies":
+      - "PolicyDocument":
+          "Statement":
+          - "Action":
+            - "iot:CreateTopicRule"
+            - "iot:DeleteTopicRule"
+            "Effect": "Allow"
+            "Resource": "*"
+          - "Action":
+            - "iam:PassRole"
+            "Effect": "Allow"
+            "Resource":
+              "Fn::GetAtt":
+              - "IotEventsTopicRuleRole"
+              - "Arn"
+          "Version": "2012-10-17"
+        "PolicyName": "createIotTopicRule"
+      - "PolicyDocument":
+          "Statement":
+          - "Action":
+            - "logs:CreateLogGroup"
+            - "logs:CreateLogStream"
+            - "logs:PutLogEvents"
+            "Effect": "Allow"
+            "Resource": "arn:aws:logs:*:*:*"
+          "Version": "2012-10-17"
+        "PolicyName": "cloudwatchLogging"
+    "Type": "AWS::IAM::Role"
+  "VPC":
+    "Properties":
+      "CidrBlock": "192.168.128.0/24"
+      "EnableDnsHostnames": !!bool "true"
+      "EnableDnsSupport": !!bool "true"
+      "Tags":
+      - "Key": "StackName"
+        "Value":
+          "Ref": "AWS::StackName"
+    "Type": "AWS::EC2::VPC"
+  "VPCGatewayAttachment":
+    "Properties":
+      "InternetGatewayId":
+        "Ref": "InternetGateway"
+      "VpcId":
+        "Ref": "VPC"
+    "Type": "AWS::EC2::VPCGatewayAttachment"
+...
