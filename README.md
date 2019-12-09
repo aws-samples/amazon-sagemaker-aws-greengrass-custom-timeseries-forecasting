@@ -2,7 +2,7 @@
 
 ### What is this?
 
-This repository contains the AWS CloudFormation template for a time-series forecasting solution that showcases how AWS IoT and Amazon SageMaker services can deliver an end-to-end IoT+ML project. The solution is utilized in the AWS re:Invent 2019 session **IoT-309 Combining IoT and Machine Learning for Predictive Maintenance**.
+This repository contains the AWS CloudFormation template for a time-series forecasting solution that showcases how AWS IoT and Amazon SageMaker services can deliver an end-to-end IoT+ML project. The solution is utilized in the [AWS re:Invent 2019 session](https://www.youtube.com/watch?v=IbunGCa3-YM) **IoT-309 Combining IoT and Machine Learning for Predictive Maintenance**. 
 
 The repository also contains the Jupyter notebook file for reference. When deploying the CloudFormation template, the notebook will automatically be loaded into a SageMaker notebook instance for you.
 
