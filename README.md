@@ -88,7 +88,7 @@ As you can see from the query, we are querying all the ingested data (`select *`
 
 ### Training in SageMaker
 1. Go to the notebook instances page of the SageMaker console https://console.aws.amazon.com/sagemaker/home#/notebook-instances
-1. Find the notebook instance prefixed with `SagemakerNotebookInstance`. Click on **Open Jupyter** for that instance. You will redirected to the Jupyter web interface, where you will find a Jupyter notebook. This notebook was created through the CloudFormation script with SageMaker lifecycle management.
+1. Find the notebook instance prefixed with `SagemakerNotebookInstance`. Click on **Open Jupyter** for that instance. You will be redirected to the Jupyter web interface, where you will find a Jupyter notebook. This notebook was created through the CloudFormation script with SageMaker lifecycle management.
 1. Click on the notebook (file ending with .ipynb) to open it.
 
 The next part of the walkthrough has you step through the notebook. The notebook itself documents the steps taking place. By the end of the notebook, you will have created a new machine learning model from the ingested data. You will use this model in the next section of the README.
