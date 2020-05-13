@@ -4,7 +4,6 @@ from pandas import read_csv
 from datetime import datetime
 from math import sqrt
 from numpy import concatenate
-from pandas import read_csv
 from pandas import DataFrame
 from pandas import concat
 from sklearn.preprocessing import MinMaxScaler
